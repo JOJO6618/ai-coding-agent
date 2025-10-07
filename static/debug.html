@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Agent 调试监控</title>
+    <script src="https://unpkg.com/vue@3.3.4/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.6.1/dist/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .panel {
+            background: #000;
+            border: 1px solid #0f0;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .event-log {
+            height: 300px;
+            overflow-y: auto;
+            font-size: 12px;
+        }
+        .event-item {
+            padding: 2px 0;
+            border-bottom: 1px solid #333;
+        }
+        .event-type {
+            color: #ff0;
+            font-weight: bold;
+        }
+        .timestamp {
+            color: #888;
+        }
+        .actions-monitor {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 10px;
+        }
+        .action-card {
+            border: 1px solid #444;
+            padding: 5px;
+            background: #111;
+        }
+        .action-type {
+            color: #0ff;
+        }
+        .tool-status {
+            color: #f0f;
+        }
+        .streaming-true {
+            background: #330;
+        }
+        .status-running {
+            background: #003;
+        }
+        .status-completed {
+            background: #030;
+        }
+        .raw-data {
+            background: #222;
+            padding: 5px;
+            margin: 5px 0;
+            white-space: pre-wrap;
+            font-size: 11px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="debug-app" class="container">
+        <h1>🔧 AI Agent 调试监控</h1>
+        
+        <!-- 连接状态 -->
+        <div class="panel">
+            <h3>连接状态</h3>
+            <div>Socket连接: <span :style="{color: isConnected ? '#0f0' : '#f00'}">{{ isConnected ? '已连接' : '未连接' }}</span></div>
+            <div>当前消息索引: {{ currentMessageIndex }}</div>
+            <div>消息总数: {{ messages.length }}</div>
+        </div>
+
+        <!-- 控制面板 -->
+        <div class="panel">
+            <h3>控制面板</h3>
+            <button @click="clearLogs">清除日志</button>
+            <button @click="testMessage">发送测试消息</button>
+            <button @click="exportData">导出数据</button>
+            <label>
+                <input type="checkbox" v-model="pauseUpdates"> 暂停更新
+            </label>
+        </div>
+
+        <!-- 事件日志 -->
+        <div class="panel">
+            <h3>WebSocket事件流 (最新 {{ events.length }} 条)</h3>
+            <div class="event-log">
+                <div v-for="(event, idx) in events" :key="idx" class="event-item">
+                    <span class="timestamp">{{ event.time }}</span>
+                    <span class="event-type">{{ event.type }}</span>
+                    <span v-if="event.data">: {{ JSON.stringify(event.data).slice(0, 200) }}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 当前消息的Actions监控 -->
+        <div class="panel" v-if="currentMessageIndex >= 0 && messages[currentMessageIndex]">
+            <h3>当前消息Actions状态 (消息 #{{ currentMessageIndex }})</h3>
+            <div class="actions-monitor">
+                <div v-for="(action, idx) in messages[currentMessageIndex].actions" 
+                     :key="action.id" 
+                     class="action-card"
+                     :class="{
+                         'streaming-true': action.streaming,
+                         'status-running': action.tool && action.tool.status === 'running',
+                         'status-completed': action.tool && action.tool.status === 'completed'
+                     }">
+                    <div class="action-type">Action #{{ idx }}: {{ action.type }}</div>
+                    <div v-if="action.type === 'text'">
+                        Streaming: <b>{{ action.streaming }}</b><br>
+                        Content长度: {{ action.content ? action.content.length : 0 }}
+                    </div>
+                    <div v-if="action.type === 'tool'">
+                        工具: {{ action.tool.name }}<br>
+                        <span class="tool-status">状态: {{ action.tool.status }}</span><br>
+                        ID: {{ action.tool.id }}<br>
+                        有结果: {{ !!action.tool.result }}
+                    </div>
+                    <div v-if="action.type === 'thinking'">
+                        Streaming: <b>{{ action.streaming }}</b><br>
+                        Content长度: {{ action.content ? action.content.length : 0 }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 原始数据查看 -->
+        <div class="panel">
+            <h3>最新消息原始数据</h3>
+            <div class="raw-data" v-if="messages.length > 0">{{ JSON.stringify(messages[messages.length - 1], null, 2) }}</div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue;
+        
+        const debugApp = createApp({
+            data() {
+                return {
+                    isConnected: false,
+                    socket: null,
+                    events: [],
+                    messages: [],
+                    currentMessageIndex: -1,
+                    pauseUpdates: false,
+                    maxEvents: 100
+                }
+            },
+            
+            mounted() {
+                this.initSocket();
+            },
+            
+            methods: {
+                initSocket() {
+                    this.socket = io('/', {
+                        transports: ['websocket', 'polling']
+                    });
+                    
+                    // 监听所有事件
+                    const events = [
+                        'connect', 'disconnect', 'system_ready',
+                        'ai_message_start', 'thinking_start', 'thinking_chunk', 'thinking_end',
+                        'text_start', 'text_chunk', 'text_end',
+                        'tool_preparing', 'tool_hint', 'tool_start', 'tool_status', 
+                        'tool_execution_start', 'tool_execution_end', 'update_action',
+                        'task_complete', 'error'
+                    ];
+                    
+                    events.forEach(eventName => {
+                        this.socket.on(eventName, (data) => {
+                            this.logEvent(eventName, data);
+                            this.handleEvent(eventName, data);
+                        });
+                    });
+                    
+                    this.socket.on('connect', () => {
+                        this.isConnected = true;
+                    });
+                    
+                    this.socket.on('disconnect', () => {
+                        this.isConnected = false;
+                    });
+                },
+                
+                logEvent(type, data) {
+                    if (this.pauseUpdates) return;
+                    
+                    const event = {
+                        time: new Date().toLocaleTimeString('zh-CN', { hour12: false, milliseconds: true }),
+                        type: type,
+                        data: data
+                    };
+                    
+                    this.events.unshift(event);
+                    if (this.events.length > this.maxEvents) {
+                        this.events = this.events.slice(0, this.maxEvents);
+                    }
+                },
+                
+                handleEvent(eventName, data) {
+                    if (this.pauseUpdates) return;
+                    
+                    // 处理消息相关事件
+                    switch(eventName) {
+                        case 'ai_message_start':
+                            this.messages.push({
+                                role: 'assistant',
+                                actions: [],
+                                timestamp: Date.now()
+                            });
+                            this.currentMessageIndex = this.messages.length - 1;
+                            break;
+                            
+                        case 'thinking_start':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                msg.actions.push({
+                                    id: Date.now(),
+                                    type: 'thinking',
+                                    content: '',
+                                    streaming: true
+                                });
+                            }
+                            break;
+                            
+                        case 'thinking_end':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                const thinkingAction = msg.actions.find(a => a.type === 'thinking' && a.streaming);
+                                if (thinkingAction) {
+                                    thinkingAction.streaming = false;
+                                    console.log('思考结束，设置streaming=false');
+                                }
+                            }
+                            break;
+                            
+                        case 'text_start':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                msg.actions.push({
+                                    id: Date.now(),
+                                    type: 'text',
+                                    content: '',
+                                    streaming: true
+                                });
+                            }
+                            break;
+                            
+                        case 'text_chunk':
+                            if (this.currentMessageIndex >= 0 && data.content) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                const textAction = [...msg.actions].reverse().find(a => a.type === 'text' && a.streaming);
+                                if (textAction) {
+                                    textAction.content += data.content;
+                                }
+                            }
+                            break;
+                            
+                        case 'text_end':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                const textAction = [...msg.actions].reverse().find(a => a.type === 'text' && a.streaming);
+                                if (textAction) {
+                                    textAction.streaming = false;
+                                    console.log('文本结束，设置streaming=false');
+                                }
+                            }
+                            break;
+                            
+                        case 'tool_preparing':
+                        case 'tool_hint':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                msg.actions.push({
+                                    id: data.id,
+                                    type: 'tool',
+                                    tool: {
+                                        id: data.id,
+                                        name: data.name,
+                                        status: 'preparing',
+                                        arguments: {},
+                                        result: null
+                                    }
+                                });
+                            }
+                            break;
+                            
+                        case 'tool_start':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                // 查找准备中的工具或创建新的
+                                let tool = msg.actions.find(a => 
+                                    a.type === 'tool' && 
+                                    (a.id === data.preparing_id || a.tool.id === data.preparing_id)
+                                );
+                                
+                                if (tool) {
+                                    tool.tool.status = 'running';
+                                    tool.tool.arguments = data.arguments;
+                                    console.log('工具开始运行，状态改为running');
+                                } else {
+                                    msg.actions.push({
+                                        id: data.id,
+                                        type: 'tool',
+                                        tool: {
+                                            id: data.id,
+                                            name: data.name,
+                                            status: 'running',
+                                            arguments: data.arguments,
+                                            result: null
+                                        }
+                                    });
+                                }
+                            }
+                            break;
+                            
+                        case 'update_action':
+                            if (this.currentMessageIndex >= 0) {
+                                const msg = this.messages[this.currentMessageIndex];
+                                const tool = msg.actions.find(a => 
+                                    a.type === 'tool' && 
+                                    (a.tool.id === data.id || a.tool.id === data.preparing_id || a.id === data.id)
+                                );
+                                
+                                if (tool) {
+                                    tool.tool.status = data.status || 'completed';
+                                    tool.tool.result = data.result;
+                                    console.log(`工具完成，状态改为${tool.tool.status}`);
+                                }
+                            }
+                            break;
+                            
+                        case 'task_complete':
+                            this.currentMessageIndex = -1;
+                            break;
+                    }
+                },
+                
+                clearLogs() {
+                    this.events = [];
+                    this.messages = [];
+                    this.currentMessageIndex = -1;
+                },
+                
+                testMessage() {
+                    this.socket.emit('send_message', { message: '创建一个test.txt文件' });
+                },
+                
+                exportData() {
+                    const data = {
+                        events: this.events,
+                        messages: this.messages,
+                        timestamp: new Date().toISOString()
+                    };
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `debug-${Date.now()}.json`;
+                    a.click();
+                }
+            }
+        });
+        
+        debugApp.mount('#debug-app');
+    </script>
+</body>
+</html>

@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>AI Agent System</title>
+        
+        <!-- Vue 3 CDN -->
+        <script src="https://unpkg.com/vue@3.3.4/dist/vue.global.prod.js"></script>
+        
+        <!-- Socket.IO CDN -->
+        <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.6.1/dist/socket.io.min.js"></script>
+        
+        <!-- Marked.js for Markdown -->
+        <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+        
+        <!-- Prism.js for code highlighting -->
+        <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism.min.css" rel="stylesheet" />
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+        
+        <!-- KaTeX for LaTeX (无defer，同步加载) -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
+        
+        <!-- Custom CSS -->
+        <link rel="stylesheet" href="/static/style.css">
+</head>
+    <body>
+    <div id="app">
+        <!-- Loading indicator -->
+        <div v-if="!isConnected && messages.length === 0" style="text-align: center; padding: 50px;">
+            <h2>正在连接服务器...</h2>
+            <p>如果长时间无响应，请刷新页面</p>
+        </div>
+        
+        <!-- Main UI (只在连接后显示) -->
+        <template v-else>
+            <!-- 顶部状态栏 -->
+            <header class="header">
+                <div class="header-left">
+                    <span class="logo">🤖 AI Agent</span>
+                    <span class="project-path">{{ projectPath }}</span>
+                </div>
+                <div class="header-right">
+                    <span class="thinking-mode">{{ thinkingMode }}</span>
+                    <span class="connection-status" :class="{ connected: isConnected }">
+                        <span class="status-dot" :class="{ active: isConnected }"></span>
+                        {{ isConnected ? '已连接' : '未连接' }}
+                    </span>
+                </div>
+            </header>
+
+            <div class="main-container">
+                <!-- 新增：对话历史侧边栏（最左侧） -->
+                <aside class="conversation-sidebar" :class="{ collapsed: sidebarCollapsed }">
+                    <div class="conversation-header">
+                        <button @click="createNewConversation" class="new-conversation-btn" v-if="!sidebarCollapsed">
+                            <span class="btn-icon">+</span>
+                            <span class="btn-text">新建对话</span>
+                        </button>
+                        <button @click="toggleSidebar" class="toggle-sidebar-btn">
+                            <span v-if="sidebarCollapsed">☰</span>
+                            <span v-else>←</span>
+                        </button>
+                    </div>
+                    
+                    <template v-if="!sidebarCollapsed">
+                        <div class="conversation-search">
+                            <input v-model="searchQuery" 
+                                   @input="searchConversations" 
+                                   placeholder="搜索对话..." 
+                                   class="search-input">
+                        </div>
+                        
+                        <div class="conversation-list">
+                            <div v-if="conversationsLoading" class="loading-conversations">
+                                正在加载...
+                            </div>
+                            <div v-else-if="conversations.length === 0" class="no-conversations">
+                                暂无对话记录
+                            </div>
+                            <div v-else>
+                                <div v-for="conv in conversations" 
+                                     :key="conv.id" 
+                                     class="conversation-item"
+                                     :class="{ active: conv.id === currentConversationId }"
+                                     @click="loadConversation(conv.id)">
+                                    <div class="conversation-title">{{ conv.title }}</div>
+                                    <div class="conversation-meta">
+                                        <span class="conversation-time">{{ formatTime(conv.updated_at) }}</span>
+                                        <span class="conversation-counts">
+                                            {{ conv.total_messages }}条消息
+                                            <span v-if="conv.total_tools > 0"> · {{ conv.total_tools }}工具</span>
+                                        </span>
+                                    </div>
+                                    <div class="conversation-actions" @click.stop>
+                                        <button @click="deleteConversation(conv.id)" 
+                                                class="delete-conversation-btn"
+                                                title="删除对话">
+                                            ×
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div v-if="hasMoreConversations" class="load-more">
+                                <button @click="loadMoreConversations" 
+                                        :disabled="loadingMoreConversations" 
+                                        class="load-more-btn">
+                                    {{ loadingMoreConversations ? '载入中...' : '加载更多' }}
+                                </button>
+                            </div>
+                        </div>
+                    </template>
+                </aside>
+
+                <!-- 左侧文件树 -->
+                <aside class="sidebar left-sidebar" :style="{ width: leftWidth + 'px' }">
+                    <div class="sidebar-header">
+                        <h3>📁 项目文件</h3>
+                    </div>
+                    <div class="file-tree">
+                        <div v-for="file in fileTree" :key="file.path" class="file-item">
+                            <span v-if="file.type === 'folder'" class="folder">
+                                📂 {{ file.name }}
+                            </span>
+                            <span v-else class="file">
+                                📄 {{ file.name }}
+                                <span v-if="file.annotation" class="annotation">
+                                    {{ file.annotation }}
+                                </span>
+                            </span>
+                        </div>
+                    </div>
+                </aside>
+                
+                <!-- 左侧拖拽手柄 -->
+                <div class="resize-handle" @mousedown="startResize('left', $event)"></div>
+
+                <!-- 中间聊天区域 -->
+                <main class="chat-container">
+                    <!-- 当前对话信息栏 -->
+                    <div class="current-conversation-info" v-if="currentConversationTitle">
+                        <span class="conversation-title-display">{{ currentConversationTitle }}</span>
+                        <span class="conversation-stats">
+                            <span class="message-count">{{ messages.length }}条消息</span>
+                        </span>
+                    </div>
+                    
+                    <!-- Token区域包装器 -->
+                    <div class="token-wrapper" v-if="currentConversationId">
+                        <!-- Token统计显示面板 -->
+                        <div class="token-display-panel" :class="{ collapsed: tokenPanelCollapsed }">
+                            <div class="token-panel-content">
+                                <div class="token-stats">
+                                    <div class="token-item">
+                                        <span class="token-label">当前上下文</span>
+                                        <span class="token-value current">{{ formatTokenCount(currentContextTokens || 0) }}</span>
+                                    </div>
+                                    
+                                    <div class="token-separator"></div>
+                                    
+                                    <div class="token-item">
+                                        <span class="token-label">累计输入</span>
+                                        <span class="token-value input">{{ formatTokenCount(currentConversationTokens.cumulative_input_tokens || 0) }}</span>
+                                    </div>
+                                    
+                                    <div class="token-item">
+                                        <span class="token-label">累计输出</span>
+                                        <span class="token-value output">{{ formatTokenCount(currentConversationTokens.cumulative_output_tokens || 0) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 独立的切换按钮 -->
+                        <button @click="toggleTokenPanel" class="token-toggle-btn" :class="{ collapsed: tokenPanelCollapsed }">
+                            <span v-if="!tokenPanelCollapsed">▲</span>
+                            <span v-else>▼</span>
+                        </button>
+                    </div>
+                    
+                    <div class="messages-area" ref="messagesArea">
+                        <div v-for="(msg, index) in messages" :key="index" class="message-block">
+                            
+                            <!-- 用户消息 -->
+                            <div v-if="msg.role === 'user'" class="user-message">
+                                <div class="message-header">👤 用户</div>
+                                <div class="message-text">{{ msg.content }}</div>
+                            </div>
+                            
+                            <!-- AI消息 -->
+                            <div v-else-if="msg.role === 'assistant'" class="assistant-message">
+                                <div class="message-header">🤖 AI Assistant</div>
+                                
+                                <!-- 按顺序显示所有actions -->
+                                <div v-for="(action, actionIndex) in msg.actions" 
+                                :key="action.id"
+                                class="action-item"
+                                :class="{
+                                    'streaming-content': action.streaming,
+                                    'completed-tool': action.type === 'tool' && !action.streaming,
+                                    'immediate-show': action.streaming || action.type === 'text'
+                                }">
+                                    
+                                    <!-- 思考块 -->
+                                    <div v-if="action.type === 'thinking'" 
+                                         class="collapsible-block thinking-block"
+                                         :class="{ expanded: expandedBlocks.has(`${index}-thinking-${actionIndex}`) }">
+                                        <div class="collapsible-header" @click="toggleBlock(`${index}-thinking-${actionIndex}`)">
+                                            <div class="arrow"></div>
+                                            <div class="status-icon">
+                                                <span class="thinking-icon" :class="{ 'thinking-animation': action.streaming }">🧠</span>
+                                            </div>
+                                            <span class="status-text">{{ action.streaming ? '正在思考...' : '思考过程' }}</span>
+                                        </div>
+                                        <div class="collapsible-content">
+                                            <div class="content-inner thinking-content">
+                                                {{ action.content }}
+                                            </div>
+                                        </div>
+                                        <div v-if="action.streaming" class="progress-indicator"></div>
+                                    </div>
+                                    
+                                    <!-- 文本输出块 -->
+                                    <div v-else-if="action.type === 'text'" class="text-output">
+                                        <div class="text-content" 
+                                            :class="{ 'streaming-text': action.streaming }">
+                                            <!-- 流式：实时渲染markdown但不包装代码块 -->
+                                            <div v-if="action.streaming" v-html="renderMarkdown(action.content, true)"></div>
+                                            <!-- 完成：完整渲染包含代码块包装 -->
+                                            <div v-else v-html="renderMarkdown(action.content, false)"></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- 工具块（修复版） -->
+                                    <div v-else-if="action.type === 'tool'" 
+                                         class="collapsible-block tool-block"
+                                         :class="{ 
+                                             expanded: expandedBlocks.has(`${index}-tool-${actionIndex}`),
+                                             processing: action.tool.status === 'preparing' || action.tool.status === 'running',
+                                             completed: action.tool.status === 'completed'
+                                         }">
+                                        <div class="collapsible-header" @click="toggleBlock(`${index}-tool-${actionIndex}`)">
+                                            <div class="arrow"></div>
+                                            <div class="status-icon">
+                                                <!-- 修复：传递完整的tool对象 -->
+                                                <span class="tool-icon"
+                                                      :class="getToolAnimationClass(action.tool)">
+                                                    {{ getToolIcon(action.tool) }}
+                                                </span>
+                                            </div>
+                                            <span class="status-text">
+                                                {{ getToolStatusText(action.tool) }}
+                                            </span>
+                                            <span class="tool-desc">{{ getToolDescription(action.tool) }}</span>
+                                        </div>
+                                        <div class="collapsible-content">
+                                            <div class="content-inner">
+                                                <!-- 根据工具类型显示不同内容 -->
+                                                <div v-if="action.tool.name === 'web_search' && action.tool.result">
+                                                    <div v-for="item in action.tool.result.results" :key="item.url" class="search-result">
+                                                        <h4>{{ item.title }}</h4>
+                                                        <p>{{ item.snippet }}</p>
+                                                        <a :href="item.url" target="_blank">{{ item.url }}</a>
+                                                    </div>
+                                                </div>
+                                                <div v-else-if="action.tool.name === 'run_python' && action.tool.result">
+                                                    <div class="code-block">
+                                                        <div class="code-label">代码：</div>
+                                                        <pre><code class="language-python">{{ action.tool.result.code || action.tool.arguments.code }}</code></pre>
+                                                    </div>
+                                                    <div v-if="action.tool.result.output" class="output-block">
+                                                        <div class="output-label">输出：</div>
+                                                        <pre>{{ action.tool.result.output }}</pre>
+                                                    </div>
+                                                </div>
+                                                <div v-else>
+                                                    <pre>{{ JSON.stringify(action.tool.result || action.tool.arguments, null, 2) }}</pre>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <!-- 修复：只在running状态显示进度条 -->
+                                        <!-- 只在流式消息期间且工具运行时显示进度条 -->
+                                        <div v-if="streamingMessage && (action.tool.status === 'preparing' || action.tool.status === 'running')" 
+                                        class="progress-indicator"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 系统消息 -->
+                            <div v-else class="system-message">
+                                {{ msg.content }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 输入区域 -->
+                    <div class="input-area">
+                        <div class="input-wrapper">
+                            <textarea 
+                                v-model="inputMessage" 
+                                @keydown.enter.ctrl="sendMessage"
+                                placeholder="输入消息... (Ctrl+Enter 发送)"
+                                class="message-input"
+                                :disabled="!isConnected || streamingMessage"
+                                rows="3">
+                            </textarea>
+                            <div class="input-actions">
+                                <button @click="sendMessage" 
+                                        :disabled="!isConnected || !inputMessage.trim() || streamingMessage" 
+                                        class="btn send-btn">
+                                    {{ streamingMessage ? '处理中...' : '发送' }}
+                                </button>
+                                <button @click="stopTask" 
+                                        v-if="streamingMessage"
+                                        class="btn stop-btn">
+                                    停止
+                                </button>
+                                <button @click="clearChat" 
+                                        v-if="!streamingMessage"
+                                        class="btn clear-btn">清除</button>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+                
+                <!-- 右侧拖拽手柄 -->
+                <div class="resize-handle" @mousedown="startResize('right', $event)"></div>
+
+                <!-- 右侧聚焦文件 -->
+                <aside class="sidebar right-sidebar" :style="{ width: rightWidth + 'px' }">
+                    <div class="sidebar-header">
+                        <h3>👁️ 聚焦文件 ({{ Object.keys(focusedFiles).length }}/3)</h3>
+                    </div>
+                    <div class="focused-files">
+                        <div v-if="Object.keys(focusedFiles).length === 0" class="no-files">
+                            暂无聚焦文件
+                        </div>
+                        <div v-else class="file-tabs">
+                            <div v-for="(file, path) in focusedFiles" :key="path" class="file-tab">
+                                <div class="tab-header">
+                                    <span class="file-name">{{ path.split('/').pop() }}</span>
+                                    <span class="file-size">{{ (file.size / 1024).toFixed(1) }}KB</span>
+                                </div>
+                                <div class="file-content">
+                                    <pre><code :class="getLanguageClass(path)">{{ file.content }}</code></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </template>
+    </div>
+    <script>
+        // 全局复制代码块函数
+        function copyCodeBlock(blockId) {
+            const codeElement = document.querySelector(`[data-code-id="${blockId}"]`);
+            if (!codeElement) return;
+            
+            const button = document.querySelector(`[data-code="${blockId}"]`);
+            
+            // 如果正在显示"已复制"状态，忽略点击
+            if (button.classList.contains('copied')) return;
+            
+            // 使用保存的原始代码内容
+            const codeContent = codeElement.dataset.originalCode || codeElement.textContent;
+            
+            // 首次点击时保存原始图标
+            if (!button.dataset.originalIcon) {
+                button.dataset.originalIcon = button.textContent;
+            }
+            
+            navigator.clipboard.writeText(codeContent).then(() => {
+                button.textContent = '✓';
+                button.classList.add('copied');
+                
+                setTimeout(() => {
+                    // 使用保存的原始图标恢复
+                    button.textContent = button.dataset.originalIcon || '📋';
+                    button.classList.remove('copied');
+                }, 2000);
+            }).catch(err => {
+                console.error('复制失败:', err);
+                // 即使失败也要恢复状态
+                button.textContent = button.dataset.originalIcon || '📋';
+                button.classList.remove('copied');
+            });
+        } 
+        // 使用事件委托处理复制按钮点击
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('copy-code-btn')) {
+                const blockId = e.target.getAttribute('data-code');
+                if (blockId) copyCodeBlock(blockId);
+            }
+        });
+        </script>
+    <!-- 加载应用脚本 -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
