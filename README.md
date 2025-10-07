@@ -192,8 +192,8 @@ AI：
 
 ## 📮 联系方式
 
-- **Issues**：[项目 Issues 页面](https://github.com/你的用户名/你的仓库名/issues)
-- **讨论**：[Discussions](https://github.com/你的用户名/你的仓库名/discussions)
+- **Issues**：[项目 Issues 页面](https://github.com/JOJO6618/ai-coding-agent/issues)
+- **讨论**：[Discussions](https://github.com/JOJO6618/ai-coding-agent/discussions)
 
 ---
 
