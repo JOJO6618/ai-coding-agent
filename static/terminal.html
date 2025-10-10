@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Terminal Monitor - 实时终端查看器</title>
+    
+    <!-- xterm.js 终端模拟器 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* 头部区域 */
+        .header {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px 20px;
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #4ade80;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+        
+        .status-indicator.disconnected {
+            background: #ef4444;
+            animation: none;
+        }
+        
+        /* 会话标签栏 */
+        .session-tabs {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 10px 20px;
+            display: flex;
+            gap: 10px;
+            overflow-x: auto;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .tab {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        
+        .tab:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        .tab.active {
+            background: #007acc;
+            border-color: #007acc;
+            box-shadow: 0 4px 12px rgba(0, 122, 204, 0.3);
+        }
+        
+        .tab-icon {
+            font-size: 14px;
+        }
+        
+        .tab-close {
+            margin-left: 8px;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+        
+        .tab-close:hover {
+            opacity: 1;
+        }
+        
+        /* 主要内容区域 */
+        .main-content {
+            flex: 1;
+            display: flex;
+            padding: 20px;
+            gap: 20px;
+            overflow: hidden;
+        }
+        
+        /* 终端容器 */
+        .terminal-wrapper {
+            flex: 1;
+            background: #1e1e1e;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .terminal-header {
+            background: #2d2d2d;
+            padding: 10px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #444;
+        }
+        
+        .terminal-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            color: #888;
+        }
+        
+        .terminal-controls {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .control-btn {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        
+        .control-btn:hover {
+            opacity: 0.8;
+        }
+        
+        .control-btn.close { background: #ff5f56; }
+        .control-btn.minimize { background: #ffbd2e; }
+        .control-btn.maximize { background: #27c93f; }
+        
+        #terminal {
+            flex: 1;
+            padding: 10px;
+            padding-bottom: 30px;  /* 增加底部内边距 */
+            overflow-y: auto;      /* 确保可以滚动 */
+        }
+        
+        /* 侧边栏信息 */
+        .sidebar {
+            width: 300px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            overflow-y: auto;
+        }
+        
+        .info-section {
+            margin-bottom: 20px;
+        }
+        
+        .info-section h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: rgba(255, 255, 255, 0.7);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 14px;
+        }
+        
+        .info-label {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .info-value {
+            color: #fff;
+            font-weight: 500;
+        }
+        
+        /* 命令历史 */
+        .command-history {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        
+        .command-item {
+            padding: 5px;
+            margin: 2px 0;
+            font-family: monospace;
+            font-size: 12px;
+            color: #4ade80;
+            border-left: 2px solid #4ade80;
+            padding-left: 10px;
+        }
+        
+        /* 底部状态栏 */
+        .status-bar {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        .status-left {
+            display: flex;
+            gap: 20px;
+        }
+        
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .main-content {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+            }
+        }
+        
+        /* 加载动画 */
+        .loader {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* 提示信息 */
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 1000;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- 头部 -->
+    <div class="header">
+        <h1>
+            🖥️ AI Terminal Monitor
+            <span class="status-indicator" id="connectionStatus"></span>
+            <span style="font-size: 14px; font-weight: normal; margin-left: 10px;" id="connectionText">连接中...</span>
+        </h1>
+    </div>
+    
+    <!-- 会话标签 -->
+    <div class="session-tabs" id="sessionTabs">
+        <div class="tab" onclick="createNewSession()">
+            <span class="tab-icon">➕</span>
+            <span>等待终端会话...</span>
+        </div>
+    </div>
+    
+    <!-- 主内容区 -->
+    <div class="main-content">
+        <!-- 终端容器 -->
+        <div class="terminal-wrapper">
+            <div class="terminal-header">
+                <div class="terminal-title">
+                    <span id="terminalSession">无活动会话</span>
+                    <span id="terminalPath" style="color: #666;">-</span>
+                </div>
+                <div class="terminal-controls">
+                    <div class="control-btn close" title="关闭"></div>
+                    <div class="control-btn minimize" title="最小化"></div>
+                    <div class="control-btn maximize" title="最大化"></div>
+                </div>
+            </div>
+            <div id="terminal"></div>
+        </div>
+        
+        <!-- 侧边栏 -->
+        <div class="sidebar">
+            <!-- 会话信息 -->
+            <div class="info-section">
+                <h3>📊 会话信息</h3>
+                <div class="info-item">
+                    <span class="info-label">会话名称</span>
+                    <span class="info-value" id="sessionName">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">工作目录</span>
+                    <span class="info-value" id="workingDir">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Shell类型</span>
+                    <span class="info-value" id="shellType">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">运行时间</span>
+                    <span class="info-value" id="uptime">-</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">缓冲区</span>
+                    <span class="info-value" id="bufferSize">0 KB</span>
+                </div>
+            </div>
+            
+            <!-- 命令历史 -->
+            <div class="info-section">
+                <h3>📝 最近命令</h3>
+                <div class="command-history" id="commandHistory">
+                    <div style="color: #666; text-align: center;">暂无命令</div>
+                </div>
+            </div>
+            
+            <!-- 统计信息 -->
+            <div class="info-section">
+                <h3>📈 统计</h3>
+                <div class="info-item">
+                    <span class="info-label">总命令数</span>
+                    <span class="info-value" id="commandCount">0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">输出行数</span>
+                    <span class="info-value" id="outputLines">0</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">活动会话</span>
+                    <span class="info-value" id="activeCount">0</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 状态栏 -->
+    <div class="status-bar">
+        <div class="status-left">
+            <div class="status-item">
+                <span>⚡</span>
+                <span id="latency">延迟: 0ms</span>
+            </div>
+            <div class="status-item">
+                <span>📡</span>
+                <span id="dataRate">0 KB/s</span>
+            </div>
+            <div class="status-item">
+                <span>🕐</span>
+                <span id="currentTime"></span>
+            </div>
+        </div>
+        <div class="status-right">
+            <span style="opacity: 0.6;">AI Agent Terminal Monitor v1.0</span>
+        </div>
+    </div>
+    
+    <!-- 提示框 -->
+    <div class="tooltip" id="tooltip"></div>
+    
+    <!-- 引入依赖 -->
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    
+    <script>
+        // 全局变量
+        let term = null;
+        let fitAddon = null;
+        let socket = null;
+        let currentSession = null;
+        let sessions = {};
+        let commandHistory = [];
+        let stats = {
+            commandCount: 0,
+            outputLines: 0,
+            dataReceived: 0,
+            startTime: Date.now()
+        };
+        
+        // 初始化终端
+        function initTerminal() {
+            term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+                theme: {
+                    background: '#1e1e1e',
+                    foreground: '#d4d4d4',
+                    cursor: '#aeafad',
+                    black: '#000000',
+                    red: '#cd3131',
+                    green: '#0dbc79',
+                    yellow: '#e5e510',
+                    blue: '#2472c8',
+                    magenta: '#bc3fbc',
+                    cyan: '#11a8cd',
+                    white: '#e5e5e5'
+                },
+                scrollback: 10000,
+                cols: 120,  // 设置固定列数
+                rows: 30,   // 设置固定行数
+                convertEol: true,  // 转换行尾
+                wordSeparator: ' ()[]{}\'"',  // 单词分隔符
+                rendererType: 'canvas',  // 使用canvas渲染器
+                allowTransparency: false
+            });
+            
+            // 添加插件
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+            
+            const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            term.loadAddon(webLinksAddon);
+            
+            // 打开终端
+            term.open(document.getElementById('terminal'));
+            
+            // 延迟执行fit以确保正确计算尺寸
+            setTimeout(() => {
+                fitAddon.fit();
+                console.log(`终端尺寸: ${term.cols}x${term.rows}`);
+            }, 100);
+            
+            // 显示欢迎信息
+            term.writeln('\x1b[1;36m╔════════════════════════════════════════╗\x1b[0m');
+            term.writeln('\x1b[1;36m║     🤖 AI Terminal Monitor v1.0       ║\x1b[0m');
+            term.writeln('\x1b[1;36m╚════════════════════════════════════════╝\x1b[0m');
+            term.writeln('');
+            term.writeln('\x1b[33m正在连接到AI Agent...\x1b[0m');
+            term.writeln('');
+        }
+        
+        // 初始化WebSocket连接
+        function initWebSocket() {
+            socket = io();
+            
+            // 连接成功
+            socket.on('connect', () => {
+                console.log('WebSocket连接成功');
+                updateConnectionStatus(true);
+                term.writeln('\x1b[32m✓ 已连接到服务器\x1b[0m');
+                
+                // 订阅所有终端事件
+                socket.emit('terminal_subscribe', { all: true });
+                console.log('已发送终端订阅请求');
+            });
+            
+            // 连接断开
+            socket.on('disconnect', () => {
+                console.log('WebSocket连接断开');
+                updateConnectionStatus(false);
+                term.writeln('\x1b[31m✗ 与服务器断开连接\x1b[0m');
+            });
+            
+            // 订阅成功确认
+            socket.on('terminal_subscribed', (data) => {
+                console.log('终端订阅成功:', data);
+                term.writeln('\x1b[32m✓ 已订阅终端事件\x1b[0m');
+            });
+            
+            // 终端启动事件
+            socket.on('terminal_started', (data) => {
+                console.log('终端启动:', data);
+                addSession(data.session, data);
+                term.writeln(`\x1b[32m[终端启动]\x1b[0m ${data.session} - ${data.working_dir}`);
+            });
+            
+            // 终端列表更新
+            socket.on('terminal_list_update', (data) => {
+                console.log('终端列表更新:', data);
+                if (data.terminals && data.terminals.length > 0) {
+                    // 清除所有会话并重新添加
+                    sessions = {};
+                    for (const terminal of data.terminals) {
+                        sessions[terminal.name] = {
+                            working_dir: terminal.working_dir,
+                            is_running: terminal.is_running,
+                            shell: 'bash'
+                        };
+                    }
+                    updateSessionTabs();
+                    if (data.active && !currentSession) {
+                        switchToSession(data.active);
+                    }
+                }
+            });
+            
+            // 终端输出事件
+            socket.on('terminal_output', (data) => {
+                console.log('收到终端输出:', data.session, data.data.length + '字节');
+                if (data.session === currentSession || !currentSession) {
+                    // 如果没有当前会话，自动切换到这个会话
+                    if (!currentSession && data.session) {
+                        if (!sessions[data.session]) {
+                            addSession(data.session, {
+                                session: data.session,
+                                working_dir: 'unknown'
+                            });
+                        }
+                        switchToSession(data.session);
+                    }
+                    // 直接写入原始输出
+                    term.write(data.data);
+                    stats.outputLines++;
+                    stats.dataReceived += data.data.length;
+                    updateStats();
+                }
+            });
+            
+            // 终端输入事件（AI发送的命令）
+            socket.on('terminal_input', (data) => {
+                console.log('收到终端输入:', data.session, data.data);
+                if (data.session === currentSession || !currentSession) {
+                    // 如果没有当前会话，自动切换到这个会话
+                    if (!currentSession && data.session) {
+                        if (!sessions[data.session]) {
+                            addSession(data.session, {
+                                session: data.session,
+                                working_dir: 'unknown'
+                            });
+                        }
+                        switchToSession(data.session);
+                    }
+                    // 用绿色显示输入的命令
+                    term.write(`\x1b[1;32m➜ ${data.data}\x1b[0m`);
+                    
+                    // 添加到命令历史
+                    addCommandToHistory(data.data.trim());
+                    stats.commandCount++;
+                    updateStats();
+                }
+            });
+            
+            // 终端关闭事件
+            socket.on('terminal_closed', (data) => {
+                console.log('终端关闭:', data);
+                removeSession(data.session);
+                term.writeln(`\x1b[31m[终端关闭]\x1b[0m ${data.session}`);
+            });
+            
+            // 终端切换事件
+            socket.on('terminal_switched', (data) => {
+                console.log('终端切换:', data);
+                switchToSession(data.current);
+            });
+            
+            // 调试：监听所有事件
+            const onevent = socket.onevent;
+            socket.onevent = function (packet) {
+                const args = packet.data || [];
+                console.log('Socket事件:', args[0], args[1]);
+                onevent.call(this, packet);
+            };
+        }
+        
+        // 添加会话
+        function addSession(name, info) {
+            sessions[name] = info;
+            updateSessionTabs();
+            
+            // 如果是第一个会话，自动切换
+            if (!currentSession) {
+                switchToSession(name);
+            }
+        }
+        
+        // 移除会话
+        function removeSession(name) {
+            delete sessions[name];
+            updateSessionTabs();
+            
+            // 如果是当前会话，切换到其他会话
+            if (currentSession === name) {
+                const remaining = Object.keys(sessions);
+                if (remaining.length > 0) {
+                    switchToSession(remaining[0]);
+                } else {
+                    currentSession = null;
+                    updateSessionInfo();
+                }
+            }
+        }
+        
+        // 切换会话
+        function switchToSession(name) {
+            currentSession = name;
+            updateSessionTabs();
+            updateSessionInfo();
+            
+            // 清空终端并显示切换信息
+            term.clear();
+            term.writeln(`\x1b[36m[切换到终端: ${name}]\x1b[0m`);
+            term.writeln('');
+            
+            // 请求该会话的历史输出
+            socket.emit('get_terminal_output', { session: name });
+        }
+        
+        // 更新会话标签
+        function updateSessionTabs() {
+            const container = document.getElementById('sessionTabs');
+            container.innerHTML = '';
+            
+            if (Object.keys(sessions).length === 0) {
+                container.innerHTML = `
+                    <div class="tab">
+                        <span class="tab-icon">⏳</span>
+                        <span>等待终端会话...</span>
+                    </div>
+                `;
+                return;
+            }
+            
+            for (const [name, info] of Object.entries(sessions)) {
+                const tab = document.createElement('div');
+                tab.className = `tab ${name === currentSession ? 'active' : ''}`;
+                tab.innerHTML = `
+                    <span class="tab-icon">📟</span>
+                    <span>${name}</span>
+                `;
+                tab.onclick = () => switchToSession(name);
+                container.appendChild(tab);
+            }
+        }
+        
+        // 更新会话信息
+        function updateSessionInfo() {
+            if (!currentSession || !sessions[currentSession]) {
+                document.getElementById('sessionName').textContent = '-';
+                document.getElementById('workingDir').textContent = '-';
+                document.getElementById('shellType').textContent = '-';
+                document.getElementById('terminalSession').textContent = '无活动会话';
+                document.getElementById('terminalPath').textContent = '-';
+                return;
+            }
+            
+            const info = sessions[currentSession];
+            document.getElementById('sessionName').textContent = currentSession;
+            document.getElementById('workingDir').textContent = info.working_dir || '-';
+            document.getElementById('shellType').textContent = info.shell || '-';
+            document.getElementById('terminalSession').textContent = currentSession;
+            document.getElementById('terminalPath').textContent = info.working_dir || '-';
+        }
+        
+        // 添加命令到历史
+        function addCommandToHistory(command) {
+            commandHistory.unshift(command);
+            if (commandHistory.length > 20) {
+                commandHistory.pop();
+            }
+            updateCommandHistory();
+        }
+        
+        // 更新命令历史显示
+        function updateCommandHistory() {
+            const container = document.getElementById('commandHistory');
+            if (commandHistory.length === 0) {
+                container.innerHTML = '<div style="color: #666; text-align: center;">暂无命令</div>';
+                return;
+            }
+            
+            container.innerHTML = commandHistory
+                .map(cmd => `<div class="command-item">${cmd}</div>`)
+                .join('');
+        }
+        
+        // 更新统计信息
+        function updateStats() {
+            document.getElementById('commandCount').textContent = stats.commandCount;
+            document.getElementById('outputLines').textContent = stats.outputLines;
+            document.getElementById('activeCount').textContent = Object.keys(sessions).length;
+            document.getElementById('bufferSize').textContent = (stats.dataReceived / 1024).toFixed(1) + ' KB';
+            
+            // 更新运行时间
+            const uptime = Math.floor((Date.now() - stats.startTime) / 1000);
+            const hours = Math.floor(uptime / 3600);
+            const minutes = Math.floor((uptime % 3600) / 60);
+            const seconds = uptime % 60;
+            document.getElementById('uptime').textContent = 
+                `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+        
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('connectionStatus');
+            const text = document.getElementById('connectionText');
+            
+            if (connected) {
+                indicator.classList.remove('disconnected');
+                text.textContent = '已连接';
+                text.style.color = '#4ade80';
+            } else {
+                indicator.classList.add('disconnected');
+                text.textContent = '未连接';
+                text.style.color = '#ef4444';
+            }
+        }
+        
+        // 更新当前时间
+        function updateCurrentTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                now.toLocaleTimeString('zh-CN');
+        }
+        
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            if (fitAddon) {
+                fitAddon.fit();
+            }
+        });
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            initTerminal();
+            initWebSocket();
+            
+            // 定时更新
+            setInterval(updateCurrentTime, 1000);
+            setInterval(updateStats, 1000);
+            updateCurrentTime();
+        });
+    </script>
+</body>
+</html>
