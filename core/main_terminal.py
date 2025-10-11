@@ -90,13 +90,35 @@ class MainTerminal:
         }
         #self.context_manager._web_terminal_callback = message_callback
         #self.context_manager._focused_files = self.focused_files  # 引用传递
-    
-    
+
+
+    def _ensure_conversation(self):
+        """确保CLI模式下存在可用的对话ID"""
+        if self.context_manager.current_conversation_id:
+            return
+
+        latest_list = self.context_manager.get_conversation_list(limit=1, offset=0)
+        conversations = latest_list.get("conversations", []) if latest_list else []
+
+        if conversations:
+            latest = conversations[0]
+            conv_id = latest.get("id")
+            if conv_id and self.context_manager.load_conversation_by_id(conv_id):
+                print(f"{OUTPUT_FORMATS['info']} 已加载最近对话: {conv_id}")
+                return
+
+        conversation_id = self.context_manager.start_new_conversation(
+            project_path=self.project_path,
+            thinking_mode=self.thinking_mode
+        )
+        print(f"{OUTPUT_FORMATS['info']} 新建对话: {conversation_id}")
+
+
     async def run(self):
         """运行主终端循环"""
         print(f"\n{OUTPUT_FORMATS['info']} 主终端已启动")
         print(f"{OUTPUT_FORMATS['info']} 当前对话: {self.context_manager.current_conversation_id}")
-        
+
         while True:
             try:
                 # 获取用户输入（使用人的表情）
